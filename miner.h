@@ -211,12 +211,6 @@ extern int scanhash_cryptonight(int thr_id, uint32_t *pdata, const uint32_t *pta
 
 
 
-extern void wild_keccak_hash_dbl_use_global_scratch(const uint8_t *in, size_t inlen, uint8_t *md);
-
-extern int scanhash_wildkeccak(int thr_id, uint32_t *pdata, const uint32_t *ptarget,
-                               uint32_t max_nonce, unsigned long *hashes_done);
-
-
 struct thr_info {
     int		id;
     pthread_t	pth;
@@ -248,37 +242,10 @@ extern struct work_restart *work_restart;
 extern bool jsonrpc_2;
 extern char rpc2_id[65];
 
-#define WILD_KECCAK_SCRATCHPAD_BUFFSIZE  (128<<20)
-struct  __attribute__((__packed__)) scratchpad_hi
-{
-    unsigned char prevhash[32];
-    uint64_t height;
-};
-
-#define WILD_KECCAK_ADDENDUMS_ARRAY_SIZE  10
-#define LOCAL_SCRATCHPAD_CACHE_EXPIRATION_INTERVAL 60*60*24*3   //3 days
-
-
-struct __attribute__((__packed__)) addendums_array_entry
-{
-    struct scratchpad_hi prev_hi;
-    uint64_t add_size;
-};
-
-
-struct __attribute__((__packed__)) scratchpad_file_header
-{
-    struct scratchpad_hi current_hi;
-    struct addendums_array_entry add_arr[WILD_KECCAK_ADDENDUMS_ARRAY_SIZE];
-    uint64_t scratchpad_size;
-};
 
 
 extern volatile bool stratum_have_work;
 extern volatile bool need_to_rerequest_job;
-extern uint64_t* pscratchpad_buff;
-extern volatile uint64_t scratchpad_size;
-extern struct scratchpad_hi current_scratchpad_hi;
 
 #define JSON_RPC_LONGPOLL	(1 << 0)
 #define JSON_RPC_QUIET_404	(1 << 1)
@@ -295,7 +262,6 @@ extern int timeval_subtract(struct timeval *result, struct timeval *x,
 struct timeval *y);
 extern bool fulltest(const uint32_t *hash, const uint32_t *target);
 extern void diff_to_target(uint32_t *target, double diff);
-extern bool rpc2_getfullscratchpad_decode(const json_t *val);
 
 
 struct work {
@@ -354,7 +320,6 @@ bool stratum_subscribe(struct stratum_ctx *sctx);
 bool stratum_authorize(struct stratum_ctx *sctx, const char *user, const char *pass);
 bool stratum_handle_method(struct stratum_ctx *sctx, const char *s);
 
-extern bool stratum_getscratchpad(struct stratum_ctx *sctx);
 extern bool stratum_request_job(struct stratum_ctx *sctx);
 
 extern bool rpc2_job_decode(const json_t *job, struct work *work);

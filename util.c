@@ -879,6 +879,7 @@ bool stratum_subscribe(struct stratum_ctx *sctx)
     json_t *val = NULL, *res_val, *err_val;
     json_error_t err;
     bool ret = false, retry = false;
+    goto out;
 
 start:
     if (retry)
@@ -970,43 +971,6 @@ out:
     return ret;
 }
 
-bool stratum_getscratchpad(struct stratum_ctx *sctx) {
-
-    json_t *val = NULL, *res_val, *err_val;
-    char *s, *sret;
-    json_error_t err;
-    bool ret = false;
-
-    xasprintf(&s, "{\"method\": \"getfullscratchpad\", \"params\": {\"id\": \"%s\", \"agent\": \"%s\"}, \"id\": 1}",
-              rpc2_id, USER_AGENT);
-    applog(LOG_INFO, "Getting full scratchpad....");
-    if (!stratum_send_line(sctx, s))
-        goto out;
-
-    sret = stratum_recv_line_timeout(sctx, 920);
-    if (!sret)
-        goto out;
-    applog(LOG_DEBUG, "Getting full scratchpad received line");
-
-    val = JSON_LOADS(sret, &err);
-    free(sret);
-    if (!val) {
-        applog(LOG_ERR, "JSON decode rpc2_getscratchpad response failed(%d): %s", err.line, err.text);
-        goto out;
-    }
-
-    applog(LOG_DEBUG, "Getting full scratchpad parsed line");
-
-    ret = rpc2_getfullscratchpad_decode(val);
-
-out:
-    free(s);
-    if (val)
-        json_decref(val);
-
-    return ret;
-}
-
 bool stratum_request_job(struct stratum_ctx *sctx)
 {
     json_t *val = NULL, *res_val, *err_val;
@@ -1017,10 +981,8 @@ bool stratum_request_job(struct stratum_ctx *sctx)
 
     if(jsonrpc_2) {
         /* sizeof(s)-1 because send_line appends '\n' */
-        snprintf(s, sizeof(s)-1, "{\"method\": \"getjob\", \"params\": {\"id\": \"%s\", \"hi\": { \"height\": %" PRIu64
-                 ", \"block_id\": \"%s\" }, \"agent\": \"%s\"}, \"id\": 1}",
-                 rpc2_id, current_scratchpad_hi.height, bin2hex((const unsigned char*)current_scratchpad_hi.prevhash, 32),
-                 USER_AGENT);
+        snprintf(s, sizeof(s)-1, "{\"method\": \"getjob\", \"params\": {\"id\": \"%s\", \"agent\": \"%s\"}, \"id\": 1}",
+                 rpc2_id, USER_AGENT);
 
     } else {
         return false;
@@ -1073,9 +1035,8 @@ bool stratum_authorize(struct stratum_ctx *sctx, const char *user, const char *p
     bool ret = false;
 
     if(jsonrpc_2) {
-        xasprintf(&s, "{\"method\": \"login\", \"params\": {\"login\": \"%s\", \"pass\": \"%s\", \"hi\": { \"height\": %" PRIu64 ", \"block_id\": \"%s\" }, \"agent\": \"%s\"}, \"id\": 1}",
-            user, pass, current_scratchpad_hi.height, bin2hex((const unsigned char*)current_scratchpad_hi.prevhash, 32),
-            USER_AGENT);
+        xasprintf(&s, "{\"method\": \"login\", \"params\": {\"login\": \"%s\", \"pass\": \"%s\", \"agent\": \"%s\"}, \"id\": 1}",
+            user, pass, USER_AGENT);
     } else {
         xasprintf(&s, "{\"id\": 2, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"%s\"]}",
             user, pass);
