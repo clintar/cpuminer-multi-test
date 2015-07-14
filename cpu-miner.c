@@ -1068,8 +1068,8 @@ static void *miner_thread(void *userdata) {
         gettimeofday(&tv_start, NULL );
 
         /* scan nonces for a proof-of-work hash */
-//        rc = scanhash_wildkeccak(thr_id, work.data, work.target, max_nonce, &hashes_done);
-        rc = scanhash_x11(thr_id, work.data, work.target, max_nonce, &hashes_done);
+        //rc = scanhash_wildkeccak(thr_id, work.data, work.target, max_nonce, &hashes_done);
+        rc = scanhash_x11_jsonrpc_2(thr_id, work.data, work.target, max_nonce, &hashes_done);
 
         /* record scanhash elapsed time */
         gettimeofday(&tv_end, NULL );

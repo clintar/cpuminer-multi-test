@@ -194,3 +194,26 @@ int scanhash_x11(int thr_id, uint32_t *pdata, const uint32_t *ptarget,
 	pdata[19] = n;
 	return 0;
 }
+
+int scanhash_x11_jsonrpc_2(int thr_id, uint32_t *pdata, const uint32_t *ptarget,
+	uint32_t max_nonce, uint64_t *hashes_done)
+{
+	uint32_t *nonceptr = (uint32_t*) (((char*)pdata) + 1);
+    uint32_t n = *nonceptr - 1;
+    const uint32_t first_nonce = n + 1;
+    const uint32_t Htarg = ptarget[7];
+    uint32_t hash[8] __attribute__((aligned(32)));
+
+    do {
+        *nonceptr = ++n;
+        x11_hash((uint8_t*)pdata, sizeof(pdata), (uint8_t*)hash);
+        //if (unlikely(  *((uint64_t*)&hash[6])    <   *((uint64_t*)&ptarget[6]) ))
+        if (unlikely(hash[7] < ptarget[7])) {
+            *hashes_done = n - first_nonce + 1;
+            return true;
+        }
+    } while (likely((n <= max_nonce && !work_restart[thr_id].restart)));
+
+    *hashes_done = n - first_nonce + 1;
+    return 0;
+}
