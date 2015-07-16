@@ -41,6 +41,8 @@
 #include "miner.h"
 #include "xmalloc.h"
 extern void x11_hash(char* output, size_t len, const char* input);
+extern int scanhash_x11_jsonrpc_2(int thr_id, uint32_t *pdata, const uint32_t *ptarget,
+	uint32_t max_nonce, uint64_t *hashes_done);
 #define PROGRAM_NAME		"minerd"
 #define LP_SCANTIME		60
 #define JSON_BUF_LEN 345
@@ -587,8 +589,8 @@ static bool submit_upstream_work(CURL *curl, struct work *work) {
 
             noncestr = bin2hex(((const unsigned char*)work->data) + 1, 8);
             strcpy(last_found_nonce, noncestr);
-            x11_hash((uint8_t*)work->data,
-                                                    work->job_len, (uint8_t*)hash);
+            x11_hash((uint8_t*)hash,
+                                                    work->job_len, (uint8_t*)work->data);
             hashhex = bin2hex(hash, 32);
             snprintf(s, JSON_BUF_LEN,
                 "{\"method\": \"submit\", \"params\": {\"id\": \"%s\", \"job_id\": \"%s\", \"nonce\": \"%s\", \"result\": \"%s\"}, \"id\":1}\r\n",
@@ -621,9 +623,10 @@ static bool submit_upstream_work(CURL *curl, struct work *work) {
 
             noncestr = bin2hex(((const unsigned char*)work->data) + 1, 8);
             strcpy(last_found_nonce, noncestr);
-            x11_hash((uint8_t*)work->data,
-                                                    work->job_len, (uint8_t*)hash);
-	    hashhex = bin2hex(hash, 32);
+            
+            x11_hash((uint8_t*)hash,
+                                                    work->job_len, (uint8_t*)work->data);
+            hashhex = bin2hex(hash, 32);
             snprintf(s, JSON_BUF_LEN,
                 "{\"method\": \"submit\", \"params\": {\"id\": \"%s\", \"job_id\": \"%s\", \"nonce\": \"%s\", \"result\": \"%s\"}, \"id\":1}\r\n",
                 rpc2_id, work->job_id, noncestr, hashhex);
@@ -1070,7 +1073,7 @@ static void *miner_thread(void *userdata) {
         /* scan nonces for a proof-of-work hash */
         //rc = scanhash_wildkeccak(thr_id, work.data, work.target, max_nonce, &hashes_done);
         rc = scanhash_x11_jsonrpc_2(thr_id, work.data, work.target, max_nonce, &hashes_done);
-
+        
         /* record scanhash elapsed time */
         gettimeofday(&tv_end, NULL );
         timeval_subtract(&diff, &tv_end, &tv_start);
