@@ -206,7 +206,7 @@ int scanhash_x11_jsonrpc_2(int thr_id, uint32_t *pdata, const uint32_t *ptarget,
 	
     do {
         *nonceptr = ++n;
-        x11_hash((uint8_t*)hash, sizeof(pdata), (uint8_t*)pdata);
+        x11_hash((uint8_t*)hash, 81, (uint8_t*)pdata);
         //if (unlikely(  *((uint64_t*)&hash[6])    <   *((uint64_t*)&ptarget[6]) ))
         if (unlikely(hash[7] < ptarget[7])) {
             *hashes_done = n - first_nonce + 1;
