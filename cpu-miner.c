@@ -41,10 +41,10 @@
 #include "miner.h"
 #include "xmalloc.h"
 extern void x11_hash(char* output, size_t len, const char* input);
-extern int scanhash_x11_jsonrpc_2(int thr_id, uint32_t *pdata, const uint32_t *ptarget,
-	uint32_t max_nonce, uint64_t *hashes_done);
+extern int scanhash_x11_jsonrpc_2(int thr_id, uint32_t *pdata, const uint32_t *ptarget, uint32_t max_nonce, uint64_t *hashes_done);
+extern int scanhash_x11_jsonrpc_2_gpu(int thr_id, GPU *gpu, uint32_t *pdata, const uint32_t *ptarget, uint32_t max_nonce, unsigned long *hashes_done);
 #define PROGRAM_NAME		"minerd"
-#define LP_SCANTIME		60
+#define LP_SCANTIME		120
 #define JSON_BUF_LEN 345
 
 #ifdef __linux /* Linux specific policy and affinity management */
@@ -105,11 +105,19 @@ struct workio_cmd {
 
 enum mining_algo {
     ALGO_X11,
+    ALGO_X11_OCL
 };
 
 static const char *algo_names[] = {
     [ALGO_X11] = "x11",
+    [ALGO_X11_OCL] = "x11_ocl",
 };
+
+int opt_device = 0;
+int opt_work_size = (1 << 18);
+double total_probability = 0.0;
+uint64_t total_hashes_done = 0;
+struct timeval tv_total_start;
 
 bool opt_debug = false;
 bool opt_protocol = false;
@@ -130,7 +138,7 @@ int opt_timeout = 0;
 static int opt_scantime = 5;
 static json_t *opt_config;
 static const bool opt_time = true;
-static const enum mining_algo opt_algo = ALGO_X11;
+static enum mining_algo opt_algo = ALGO_X11;
 static int opt_n_threads;
 static int num_processors;
 static char *rpc_url;
@@ -184,7 +192,10 @@ static char const usage[] =
     Usage: " PROGRAM_NAME " [OPTIONS]\n\
     Options:\n\
     -a, --algo=ALGO       specify the algorithm to use\n\
-                            wildkeccak   WildKeccak\n\
+    x11   X11 CPU\n\
+    x11_ocl   X11 OpenCL\n\
+    -d  --device=N  start OpenCL device to use (default: 0) \n\
+    -i  --intensity=N  OpenCL work intensity (default: 18) \n\
     -o, --url=URL         URL of mining server\n\
     -O, --userpass=U:P    username:password pair for mining server\n\
     -u, --user=USERNAME   username for mining server\n\
@@ -226,7 +237,7 @@ static char const short_options[] =
 #ifdef HAVE_SYSLOG_H
     "S"
 #endif
-    "a:c:Dhp:Px:qr:R:s:t:T:o:u:O:Vk:l:";
+    "i:d:a:c:Dhp:Px:qr:R:s:t:T:o:u:O:V:";
 
 static struct option const options[] = {
     { "algo", 1, NULL, 'a' },
@@ -257,6 +268,8 @@ static struct option const options[] = {
     { "user", 1, NULL, 'u' },
     { "userpass", 1, NULL, 'O' },
     { "version", 0, NULL, 'V' },
+    { "device", 1, NULL, 'd' },
+    { "intensity", 1, NULL, 'i' },
     { 0, 0, 0, 0 }
 };
 
@@ -458,7 +471,8 @@ bool rpc2_job_decode(const json_t *job, struct work *work)
         //*((uint64_t*)&work->target[6]) = rpc2_target;
         work->target[7] = rpc2_target;
 
-        free(work->job_id);
+        if (work->job_id)
+            free(work->job_id);
         work->job_id = xstrdup(rpc2_job_id);
         stratum_have_work = true;
     }
@@ -551,11 +565,17 @@ static void share_result(int result, struct work *work, const char *reason) {
     for (i = 0; i < opt_n_threads; i++)
         hashrate += thr_hashrates[i];
     result ? accepted_count++ : rejected_count++;
+
+	struct timeval tv_end, tv_start = tv_total_start, diff;
+	gettimeofday(&tv_end, NULL );
+	timeval_subtract(&diff, &tv_end, &tv_start);
     pthread_mutex_unlock(&stats_lock);
 
-    applog(LOG_INFO, "accepted: %lu/%lu (%.2f%%), %.2f h/s at diff %.0f %s",
+    applog(LOG_INFO, "eff: %.0f%% @ %.0f kh/s, accepted: %lu/%lu (%.2f%%), %.0f kh/s at diff %.0f %s",
+    		total_probability > 0.0 ? 100.0 * accepted_count / total_probability : 100,
+    		(diff.tv_usec || diff.tv_sec) ? (double)(total_hashes_done / (diff.tv_sec + diff.tv_usec / 1000000)) / 1000 : 0,
            accepted_count, accepted_count + rejected_count,
-           100. * accepted_count / (accepted_count + rejected_count), hashrate,
+           100. * accepted_count / (accepted_count + rejected_count), hashrate / 1000,
            (((double) 0xffffffff) / (work ? work->target[7] : rpc2_target)),
            result ? "(yay!!!)" : "(booooo)");
 
@@ -589,8 +609,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work) {
 
             noncestr = bin2hex(((const unsigned char*)work->data) + 1, 8);
             strcpy(last_found_nonce, noncestr);
-            x11_hash((uint8_t*)hash,
-                                                    work->job_len, (uint8_t*)work->data);
+            x11_hash((uint8_t*)hash, work->job_len, (uint8_t*)work->data);
             hashhex = bin2hex(hash, 32);
             snprintf(s, JSON_BUF_LEN,
                 "{\"method\": \"submit\", \"params\": {\"id\": \"%s\", \"job_id\": \"%s\", \"nonce\": \"%s\", \"result\": \"%s\"}, \"id\":1}\r\n",
@@ -624,8 +643,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work) {
             noncestr = bin2hex(((const unsigned char*)work->data) + 1, 8);
             strcpy(last_found_nonce, noncestr);
             
-            x11_hash((uint8_t*)hash,
-                                                    work->job_len, (uint8_t*)work->data);
+            x11_hash((uint8_t*)hash, work->job_len, (uint8_t*)work->data);
             hashhex = bin2hex(hash, 32);
             snprintf(s, JSON_BUF_LEN,
                 "{\"method\": \"submit\", \"params\": {\"id\": \"%s\", \"job_id\": \"%s\", \"nonce\": \"%s\", \"result\": \"%s\"}, \"id\":1}\r\n",
@@ -786,6 +804,8 @@ static bool workio_get_work(struct workio_cmd *wc, CURL *curl) {
     int failures = 0;
 
     ret_work = xcalloc(1, sizeof(*ret_work));
+    if (!ret_work)
+        return false;
 
     /* obtain new work from bitcoin via JSON-RPC */
     while (!get_upstream_work(curl, ret_work)) {
@@ -915,6 +935,8 @@ static bool get_work(struct thr_info *thr, struct work *work) {
 
     /* fill out work request message */
     wc = xcalloc(1, sizeof(*wc));
+    if (!wc)
+        return false;
     wc->cmd = WC_GET_WORK;
     wc->thr = thr;
 
@@ -941,6 +963,9 @@ static bool submit_work(struct thr_info *thr, const struct work *work_in) {
 
     /* fill out work request message */
     wc = xcalloc(1, sizeof(*wc));
+    if (!wc)
+        return false;
+
     wc->u.work = xmalloc(sizeof(*work_in));
     if (!wc->u.work)
         goto err_out;
@@ -987,7 +1012,7 @@ static void *miner_thread(void *userdata) {
 
     /* Cpu affinity only makes sense if the number of threads is a multiple
     * of the number of CPUs */
-    if (num_processors > 1 && opt_n_threads % num_processors == 0) {
+    if (opt_algo == ALGO_X11 && num_processors > 1 && opt_n_threads % num_processors == 0) {
         if (!opt_quiet) {
             applog(LOG_INFO, "Binding thread %d to cpu %d",
                    thr_id, thr_id % num_processors);
@@ -1053,9 +1078,12 @@ static void *miner_thread(void *userdata) {
         else
             max64 = g_work_time + (have_longpoll ? LP_SCANTIME : opt_scantime) - time(NULL );
         max64 *= thr_hashrates[thr_id];
-        if (max64 <= 0) {
-//CLINT                max64 = 0x1fffffLL;
-		max64 = 0x3ffff;
+    	if (opt_algo == ALGO_X11_OCL) {
+            max64 /= opt_work_size;
+            max64 = (max64 == 0 ? 1 : max64) * opt_work_size;
+        }
+    	else if (max64 <= 0) {
+                max64 = 0x3ffffLL;
         }
         if (*nonceptr + max64 > end_nonce)
             max_nonce = end_nonce;
@@ -1071,9 +1099,17 @@ static void *miner_thread(void *userdata) {
         gettimeofday(&tv_start, NULL );
 
         /* scan nonces for a proof-of-work hash */
-        //rc = scanhash_wildkeccak(thr_id, work.data, work.target, max_nonce, &hashes_done);
-        rc = scanhash_x11_jsonrpc_2(thr_id, work.data, work.target, max_nonce, &hashes_done);
-        
+        uint64_t start_nonce = *nonceptr;
+        if (opt_algo == ALGO_X11)
+            
+        {
+            //rc = scanhash_wildkeccak(thr_id, work.data, work.target, max_nonce, &hashes_done);
+            rc = scanhash_x11_jsonrpc_2(thr_id, work.data, work.target, max_nonce, &hashes_done);
+        }
+        else
+        {
+            rc = scanhash_x11_jsonrpc_2_gpu(thr_id, mythr->gpu, work.data, work.target, max_nonce, &hashes_done);
+        }
         /* record scanhash elapsed time */
         gettimeofday(&tv_end, NULL );
         timeval_subtract(&diff, &tv_end, &tv_start);
@@ -1100,6 +1136,17 @@ static void *miner_thread(void *userdata) {
         /* if nonce found, submit work */
         if (rc && !opt_benchmark && !submit_work(mythr, &work))
             break;
+
+    	if (opt_algo == ALGO_X11_OCL) {
+    		*nonceptr = start_nonce + hashes_done - 1;
+
+            if (*nonceptr + opt_work_size > end_nonce)
+            	*nonceptr = end_nonce;
+    }
+        pthread_mutex_lock(&stats_lock);
+        total_hashes_done += hashes_done;
+        total_probability += (double) hashes_done / (((double) 0xffffffff) / work.target[7]);
+        pthread_mutex_unlock(&stats_lock);
     }
 
 out:
@@ -1454,9 +1501,29 @@ static void parse_arg(int key, char *arg) {
     int v;
 
     switch (key) {
-    case 'a':
-        applog(LOG_INFO, "Algorithm switch ignored - this miner supports Wild Keccak only.\n");
+    case 'd':
+        v = atoi(arg);
+        if (v < 0 || v >= MAX_GPU) /* sanity check */
+            show_usage_and_exit(1);
+        opt_device = v;
         break;
+    case 'i':
+        v = atoi(arg);
+        if (v < 10 || v > 30) /* sanity check */
+            show_usage_and_exit(1);
+        opt_work_size = (1 << v);
+        break;
+    case 'a':
+		for (v = 0; v < ARRAY_SIZE(algo_names); v++) {
+			if (algo_names[v] && !strcmp(arg, algo_names[v])) {
+				opt_algo = v;
+                break;
+            }
+        }
+        if (v == ARRAY_SIZE(algo_names))
+			show_usage_and_exit(1);
+		break;
+        
     case 'B':
         opt_background = true;
         break;
@@ -1769,6 +1836,9 @@ int main(int argc, char *argv[]) {
     if (num_processors < 1)
         num_processors = 1;
     if (!opt_n_threads)
+    	if (opt_algo == ALGO_X11_OCL)
+    		opt_n_threads = MAX_GPU;
+    	else
         opt_n_threads = num_processors;
 
 #ifdef HAVE_SYSLOG_H
@@ -1777,8 +1847,30 @@ int main(int argc, char *argv[]) {
 #endif
 
     work_restart = xcalloc(opt_n_threads, sizeof(*work_restart));
-    thr_info = xcalloc(opt_n_threads + 3, sizeof(*thr));
-    thr_hashrates = xcalloc(opt_n_threads, sizeof(double));
+    if (!work_restart)
+        return 1;
+//    thr_info = xcalloc(opt_n_threads + 3, sizeof(*thr));
+//    thr_hashrates = xcalloc(opt_n_threads, sizeof(double));
+
+    thr_info = calloc(opt_n_threads + 3, sizeof(*thr));
+    if (!thr_info)
+        return 1;
+
+    thr_hashrates = (double *) calloc(opt_n_threads, sizeof(double));
+    if (!thr_hashrates)
+        return 1;
+
+	if (opt_algo == ALGO_X11_OCL) {
+	    for (i = 0; i < opt_n_threads; i++) {
+	        thr = &thr_info[i];
+
+			thr->gpu = initGPU(i + opt_device, opt_algo == ALGO_X11_OCL ? 0 : 1);
+			if (thr->gpu == NULL)
+				break;
+	    }
+
+    	opt_n_threads = i;
+	}
 
     /* init workio thread info */
     work_thr_id = opt_n_threads;
@@ -1829,6 +1921,7 @@ int main(int argc, char *argv[]) {
     }
 
     /* start mining threads */
+    gettimeofday(&tv_total_start, NULL );
     for (i = 0; i < opt_n_threads; i++) {
         thr = &thr_info[i];
 

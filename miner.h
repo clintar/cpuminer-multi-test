@@ -3,6 +3,8 @@
 
 #include "cpuminer-config.h"
 
+#include "gpu.h"
+
 #include <stdbool.h>
 #include <inttypes.h>
 #include <sys/time.h>
@@ -211,16 +213,27 @@ extern int scanhash_cryptonight(int thr_id, uint32_t *pdata, const uint32_t *pta
 
 
 
+extern void wild_keccak_hash_dbl_use_global_scratch(const uint8_t *in, size_t inlen, uint8_t *md);
+
+extern int scanhash_wildkeccak(int thr_id, uint32_t *pdata, const uint32_t *ptarget,
+                               uint32_t max_nonce, unsigned long *hashes_done);
+
+
 struct thr_info {
     int		id;
     pthread_t	pth;
     struct thread_q	*q;
+	GPU*		gpu;
+	uint32_t shares_accepted;
+	uint32_t shares_rejected;
 };
 
 struct work_restart {
     volatile unsigned long	restart;
     char			padding[128 - sizeof(unsigned long)];
 };
+
+extern int opt_work_size;
 
 extern bool opt_debug;
 extern bool opt_protocol;
